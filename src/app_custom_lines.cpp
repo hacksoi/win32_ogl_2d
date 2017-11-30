@@ -1,3 +1,7 @@
+#include "glutils_common.h"
+#include "opengl_wrappers.h"
+#include "shape_renderer.h"
+
 global char *VertexShaderSource = R"STR(
 #version 330 core
 
@@ -128,6 +132,17 @@ const float LineWidth = 40.0f;
 
 shape_renderer ShapeRenderer;
 
+inline internal uint32_t
+GetUniformLocation(uint32_t ShaderProgram, char *UniformName)
+{
+    uint32_t Result = glGetUniformLocation(ShaderProgram, UniformName);
+    if(Result == -1)
+    {
+        Printf("Could not find uniform: %s\n", UniformName);
+    }
+    return Result;
+}
+
 internal void
 UpdateAndRender(uint32_t WindowWidth, uint32_t WindowHeight, app_input *Input, float dt)
 {
@@ -140,52 +155,18 @@ UpdateAndRender(uint32_t WindowWidth, uint32_t WindowHeight, app_input *Input, f
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-            Initialize(&ShapeRenderer);
+            if(!Initialize(&ShapeRenderer, WindowWidth, WindowHeight))
+            {
+                Printf(GetGlutilsErrorMessage());
+            }
 
             /* Create anti-aliased line objects. */
             {
-                /* Create shader program. */
-                {
-                    /* Create shaders. */
-                    uint32_t VertexShader = CreateShader(GL_VERTEX_SHADER, VertexShaderSource);
-                    uint32_t GeometryShader = CreateShader(GL_GEOMETRY_SHADER, GeometryShaderSource);
-                    uint32_t FragmentShader = CreateShader(GL_FRAGMENT_SHADER, FragmentShaderSource);
-
-                    /* Create shader program. */
-                    AARenderObjects.ShaderProgram = glCreateProgram();
-                    glAttachShader(AARenderObjects.ShaderProgram, VertexShader);
-                    glAttachShader(AARenderObjects.ShaderProgram, GeometryShader);
-                    glAttachShader(AARenderObjects.ShaderProgram, FragmentShader);
-                    glLinkProgram(AARenderObjects.ShaderProgram);
-
-                    bool32 DidProgramLinkSuccessfully;
-                    glGetProgramiv(AARenderObjects.ShaderProgram, GL_LINK_STATUS, &DidProgramLinkSuccessfully);
-                    if(!DidProgramLinkSuccessfully)
-                    {
-                        PrintOpenGLError(AARenderObjects.ShaderProgram, glGetProgramInfoLog, "Error linking shader program: \n");
-                        Assert(0);
-                    }
-
-                    glDeleteShader(VertexShader);
-                    glDeleteShader(GeometryShader);
-                    glDeleteShader(FragmentShader);
-                }
-
-                /* Create vertex buffer object. */
-                glGenBuffers(1, &AARenderObjects.Vbo);
-                glBindBuffer(GL_ARRAY_BUFFER, AARenderObjects.Vbo);
-
-                /* Create vertex array object. */
-                glGenVertexArrays(1, &AARenderObjects.Vao);
-                glBindVertexArray(AARenderObjects.Vao);
-
-                /* Define first vertex attribute: top intersection point. */
-                glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void *)0);
-                glEnableVertexAttribArray(0);
-
-                /* Define second vertex attribute: bottom intersection point */
-                glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void *)(2 * sizeof(float)));
-                glEnableVertexAttribArray(1);
+                AARenderObjects.ShaderProgram = CreateShaderProgramVGF(VertexShaderSource, GeometryShaderSource, FragmentShaderSource);
+                AARenderObjects.Vbo = CreateAndBindVertexBuffer();
+                AARenderObjects.Vao = CreateAndBindVertexArray();
+                SetVertexAttributeFloat(0, 2, 4, 0);
+                SetVertexAttributeFloat(1, 2, 4, 2);
             }
         }
 
@@ -237,6 +218,8 @@ UpdateAndRender(uint32_t WindowWidth, uint32_t WindowHeight, app_input *Input, f
 
     /* Generate data used for rendering lines. */
     v2 BottomLeft, TopLeft, BottomMiddle, TopMiddle, BottomRight, TopRight;
+    v2 BottomIntersection, TopIntersection;
+    ray2 Line1BottomRay, Line1TopRay, Line2BottomRay, Line2TopRay;
     {
         /* Create lines. */
         line2 TestLine1 = {P1, P2};
@@ -253,13 +236,12 @@ UpdateAndRender(uint32_t WindowWidth, uint32_t WindowHeight, app_input *Input, f
         v2 Line2BottomDirection = Line2RectSimple.BottomLeft - Line2RectSimple.BottomRight;
 
         /* Define the rays of the quads. */
-        ray2 Line1TopRay = {Line1RectSimple.TopLeft, Line1TopDirection};
-        ray2 Line2TopRay = {Line2RectSimple.TopRight, Line2TopDirection};
-        ray2 Line1BottomRay = {Line1RectSimple.BottomLeft, Line1BottomDirection};
-        ray2 Line2BottomRay = {Line2RectSimple.BottomRight, Line2BottomDirection};
+        Line1TopRay = {Line1RectSimple.TopLeft, Line1TopDirection};
+        Line2TopRay = {Line2RectSimple.TopRight, Line2TopDirection};
+        Line1BottomRay = {Line1RectSimple.BottomLeft, Line1BottomDirection};
+        Line2BottomRay = {Line2RectSimple.BottomRight, Line2BottomDirection};
 
         /* Find the intersection points. */
-        v2 TopIntersection, BottomIntersection;
         {
             /* We assume these rays always intersect. */
             Assert(FindIntersection(&TopIntersection, Line1TopRay, Line2TopRay) == true);
@@ -269,7 +251,7 @@ UpdateAndRender(uint32_t WindowWidth, uint32_t WindowHeight, app_input *Input, f
         /* Define final line data. */
         {
             BottomLeft = Line1RectSimple.BottomLeft;
-            TopLeft = Line1RectSimple.BottomTopLeft;
+            TopLeft = Line1RectSimple.TopLeft;
 
             BottomMiddle = BottomIntersection;
             TopMiddle = TopIntersection;
@@ -283,37 +265,17 @@ UpdateAndRender(uint32_t WindowWidth, uint32_t WindowHeight, app_input *Input, f
     {
         /* Add primary line data. */
         {
-            /* Define vertex buffer. */
             float VertexBuffer[] = {
-                /* Vertex data for first point. */
-                EXPANDV2(Line1RectSimple.BottomLeft),
-                EXPANDV2(Line1RectSimple.TopLeft),
+                EXPANDV2(BottomLeft),
+                EXPANDV2(TopLeft),
 
-                /* Vertex data for second point. */
-                EXPANDV2(BottomIntersection),
-                EXPANDV2(TopIntersection),
+                EXPANDV2(BottomMiddle),
+                EXPANDV2(TopMiddle),
 
-                /* Vertex data for third point. */
-                EXPANDV2(Line2RectSimple.BottomRight),
-                EXPANDV2(Line2RectSimple.TopRight),
+                EXPANDV2(BottomRight),
+                EXPANDV2(TopRight),
             };
-
-            /* Fill vertex buffer object with our data. */
-            glBindBuffer(GL_ARRAY_BUFFER, AARenderObjects.Vbo);
-            glBufferData(GL_ARRAY_BUFFER, sizeof(VertexBuffer), VertexBuffer, GL_STREAM_DRAW);
-        }
-
-        /* Add debug data. */
-        {
-            AddPoint(&ShapeRenderer, BottomIntersection, NPS_BLUE);
-            AddPoint(&ShapeRenderer, TopIntersection, NPS_RED);
-            AddPoint(&ShapeRenderer, TestLine1.P2, NPS_YELLOW);
-
-            AddRay(&ShapeRenderer, Line1BottomRay, 400.0f, NPS_ORANGE);
-            AddRay(&ShapeRenderer, Line1TopRay, 400.0f, NPS_ORANGE);
-
-            AddRay(&ShapeRenderer, Line2BottomRay, 400.0f, NPS_GREEN);
-            AddRay(&ShapeRenderer, Line2TopRay, 400.0f, NPS_GREEN);
+            FillVertexBuffer(AARenderObjects.Vbo, VertexBuffer, sizeof(VertexBuffer));
         }
     }
 
@@ -324,22 +286,28 @@ UpdateAndRender(uint32_t WindowWidth, uint32_t WindowHeight, app_input *Input, f
 
         /* Draw custom anti-aliased lines. */
         {
-            /* Bind objects for rendering. */
             glUseProgram(AARenderObjects.ShaderProgram);
             glBindVertexArray(AARenderObjects.Vao);
 
-            /* Assign uniforms. */
             glUniform2f(GetUniformLocation(AARenderObjects.ShaderProgram, "WindowDimensions"), (float)WindowWidth, (float)WindowHeight);
             glUniform1f(GetUniformLocation(AARenderObjects.ShaderProgram, "LineWidth"), LineWidth);
 
-            /* Render our data. */
             glDrawArrays(GL_LINE_STRIP, 0, 3);
+        }
 
-            if(DrawDebug)
-            {
-                /* Render debug data. */
-                RenderData(&ShapeRenderer);
-            }
+        if(DrawDebug)
+        {
+            AddPoint(&ShapeRenderer, BottomIntersection, GLUTILS_BLUE);
+            AddPoint(&ShapeRenderer, TopIntersection, GLUTILS_RED);
+            AddPoint(&ShapeRenderer, P2, GLUTILS_YELLOW);
+
+            AddRay(&ShapeRenderer, Line1BottomRay, 400.0f, GLUTILS_ORANGE);
+            AddRay(&ShapeRenderer, Line1TopRay, 400.0f, GLUTILS_ORANGE);
+
+            AddRay(&ShapeRenderer, Line2BottomRay, 400.0f, GLUTILS_GREEN);
+            AddRay(&ShapeRenderer, Line2TopRay, 400.0f, GLUTILS_GREEN);
+
+            Render(&ShapeRenderer);
         }
     }
 }

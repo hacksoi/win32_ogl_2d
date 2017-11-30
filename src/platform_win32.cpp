@@ -1,33 +1,27 @@
 #include <windows.h>
 #include <windowsx.h>
-
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
-
-#include "nps_common_defs.h"
+#include "glcorearb.h"
+#include "wglext.h"
+#include "common.h"
 #include "nps_string.h"
 #include "nps_math.h"
 
-#include "glcorearb.h"
-#include "wglext.h"
+#include "platform.h"
+
+#if 1
+#include "app_custom_lines.cpp"
+#else
+#include "app_scratch.cpp"
+#include "app_template.cpp"
+#endif
 
 #define WMCUSTOM_ACTIVATE WM_APP
-
-struct app_input
-{
-    bool32 IsCursorDown;
-    float CursorPosX, CursorPosY;
-
-    bool32 Is1Down;
-    bool32 Is2Down;
-    bool32 Is3Down;
-
-    bool32 IsDPressed;
-};
 
 global HANDLE LogFile;
 global uint64_t GlobalPerfCountFrequency;
@@ -54,7 +48,6 @@ Log(char *Format, ...)
     va_start(VarArgs, Format);
 
     vsprintf(GeneralBuffer, Format, VarArgs);
-
     OutputDebugString(GeneralBuffer);
 
     if(LogFile == INVALID_HANDLE_VALUE)
@@ -150,15 +143,6 @@ Win32GetCursorScreenPosY()
     GetCursorPos(&CursorScreenPos);
     return CursorScreenPos.y;
 }
-
-#include "nps_glutils.h"
-
-#if 1
-#include "custom_lines.cpp"
-#else
-#include "scratch.cpp"
-#include "template.cpp"
-#endif
 
 LRESULT CALLBACK
 MainWindowProc(HWND hwnd,
@@ -299,6 +283,7 @@ WinMain(HINSTANCE hInstance,
     if(wglGetExtensionsStringARB == NULL)
     {
         Assert(0);
+        return 1;
     }
 
     char *ExtensionsSupported = (char *)wglGetExtensionsStringARB(DeviceContextHandle);
@@ -306,13 +291,14 @@ WinMain(HINSTANCE hInstance,
     for(int ExtensionIdx = 0; ExtensionIdx < ArrayCount(ExtensionsRequired); ExtensionIdx++)
     {
         char *Extension = ExtensionsRequired[ExtensionIdx];
-        if(!npsStringContains(ExtensionsSupported, Extension))
+        if(!StringContains(ExtensionsSupported, Extension))
         {
             Assert(0);
+            return 1;
         }
     }
 
-    LoadGLFunctions();
+    LoadOpenGLFunctions();
 
     DestroyWindow(WindowHandle);
 
@@ -334,7 +320,6 @@ WinMain(HINSTANCE hInstance,
                                   NULL,
                                   hInstance,
                                   NULL);
-
     if(WindowHandle == NULL)
     {
         Win32LogError("failed to create window");
@@ -405,8 +390,6 @@ WinMain(HINSTANCE hInstance,
     }
 
     /* Begin application code. */
-
-    npsGluInit(WindowWidth, WindowHeight);
 
     app_input AppInput = {};
 
